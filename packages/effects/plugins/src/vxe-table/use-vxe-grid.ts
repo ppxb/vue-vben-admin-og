@@ -1,6 +1,6 @@
 import type { VxeGridSlots, VxeGridSlotTypes } from 'vxe-table';
 
-import type { SlotsType } from 'vue';
+import type { Component, Ref, SlotsType } from 'vue';
 
 import type { BaseFormComponentType } from '@vben-core/form-ui';
 
@@ -13,58 +13,72 @@ import { useStore } from '@vben-core/shared/store';
 import { VxeGridApi } from './api';
 import VxeGrid from './use-vxe-grid.vue';
 
-type FilteredSlots<T> = {
-  [K in keyof VxeGridSlots<T> as K extends 'form'
-    ? never
-    : K]: VxeGridSlots<T>[K];
-};
+type VxeGridSlotsWithoutForm<T extends Record<string, any>> = Omit<
+  VxeGridSlots<T>,
+  'form'
+>;
 
-export function useVbenVxeGrid<
-  T extends Record<string, any> = any,
-  D extends BaseFormComponentType = BaseFormComponentType,
->(options: VxeGridProps<T, D>) {
-  // const IS_REACTIVE = isReactive(options);
-  const api = new VxeGridApi(options);
-  const extendedApi: ExtendedVxeGridApi<T, D> = api as ExtendedVxeGridApi<T, D>;
-  extendedApi.useStore = (selector) => {
-    return useStore(api.store, selector);
+type GridComponentSlots<T extends Record<string, any>> =
+  VxeGridSlotsWithoutForm<T> & {
+    'table-title': undefined;
+    'toolbar-actions': VxeGridSlotTypes.DefaultSlotParams<T>;
+    'toolbar-tools': VxeGridSlotTypes.DefaultSlotParams<T>;
   };
 
-  const Grid = defineComponent(
-    (props: VxeGridProps<T>, { attrs, slots }) => {
-      onBeforeUnmount(() => {
-        api.unmount();
-      });
-      api.setState({ ...props, ...attrs });
-      return () => h(VxeGrid, { ...props, ...attrs, api: extendedApi }, slots);
-    },
-    {
-      name: 'VbenVxeGrid',
-      inheritAttrs: false,
-      slots: Object as SlotsType<
-        {
-          // 表格标题
-          'table-title': undefined;
-          // 工具栏左侧部分
-          'toolbar-actions': VxeGridSlotTypes.DefaultSlotParams<T>;
-          // 工具栏右侧部分
-          'toolbar-tools': VxeGridSlotTypes.DefaultSlotParams<T>;
-        } & FilteredSlots<T>
-      >,
-    },
-  );
-  // Add reactivity support
-  // if (IS_REACTIVE) {
-  //   watch(
-  //     () => options,
-  //     () => {
-  //       api.setState(options);
-  //     },
-  //     { immediate: true },
-  //   );
-  // }
+type VbenVxeGridComponent = Component<any, any, any, any, any, any>;
 
-  return [Grid, extendedApi] as const;
+// 扩展 API 实现类
+class ExtendedApiImpl<
+  T extends Record<string, any>,
+  D extends BaseFormComponentType,
+>
+  extends VxeGridApi<T>
+  implements ExtendedVxeGridApi<T, D>
+{
+  useStore(): Readonly<Ref<VxeGridProps<T, D>>>;
+  useStore<R>(selector: (state: VxeGridProps<T, D>) => R): Readonly<Ref<R>>;
+  useStore<R>(selector?: (state: VxeGridProps<T, D>) => R): Readonly<Ref<any>> {
+    return useStore(this.store, selector as any);
+  }
+}
+
+export function useVbenVxeGrid<
+  T extends Record<string, any> = Record<string, any>,
+  D extends BaseFormComponentType = BaseFormComponentType,
+>(
+  options: VxeGridProps<T, D>,
+): readonly [VbenVxeGridComponent, ExtendedVxeGridApi<T, D>] {
+  // 创建扩展 API 实例
+  const baseApi = new VxeGridApi<T>(options);
+  const api = Object.setPrototypeOf(
+    baseApi,
+    ExtendedApiImpl.prototype,
+  ) as ExtendedApiImpl<T, D>;
+
+  const Grid = defineComponent({
+    name: 'VbenVxeGrid',
+    inheritAttrs: false,
+    slots: Object as SlotsType<GridComponentSlots<T>>,
+
+    setup(_props: VxeGridProps<T, D>, { attrs, slots }) {
+      onBeforeUnmount(() => {
+        baseApi.unmount();
+      });
+
+      // 合并配置
+      const mergedConfig = { ..._props, ...attrs } as VxeGridProps<T, D>;
+      baseApi.setState(mergedConfig);
+
+      return () => {
+        // 这里的 as any 只是绕过 Vue 的 h 函数类型检查
+        // 实际的类型安全由我们的类型系统保证
+        // VxeGrid 组件会接收正确类型的 props
+        return h(VxeGrid as any, { ...mergedConfig, api }, slots);
+      };
+    },
+  });
+
+  return [Grid, api] as const;
 }
 
 export type UseVbenVxeGrid = typeof useVbenVxeGrid;

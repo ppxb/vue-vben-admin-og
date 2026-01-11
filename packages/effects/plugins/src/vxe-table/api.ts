@@ -11,11 +11,43 @@ import {
   bindMethods,
   isBoolean,
   isFunction,
-  mergeWithArrayOverride,
   StateHandler,
 } from '@vben-core/shared/utils';
 
-function getDefaultState(): VxeGridProps {
+// 浅合并函数，只处理两层，避免深度递归
+function mergeState<T extends Record<string, any>>(
+  target: T,
+  source: Partial<T>,
+): T {
+  const result = { ...target };
+
+  for (const key in source) {
+    if (Object.prototype.hasOwnProperty.call(source, key)) {
+      const sourceValue = source[key];
+      const targetValue = result[key];
+
+      // 只对对象类型进行一层合并
+      if (
+        sourceValue !== null &&
+        sourceValue !== undefined &&
+        typeof sourceValue === 'object' &&
+        !Array.isArray(sourceValue) &&
+        targetValue !== null &&
+        targetValue !== undefined &&
+        typeof targetValue === 'object' &&
+        !Array.isArray(targetValue)
+      ) {
+        result[key] = { ...targetValue, ...sourceValue } as any;
+      } else if (sourceValue !== undefined) {
+        result[key] = sourceValue as any;
+      }
+    }
+  }
+
+  return result;
+}
+
+function getDefaultState<T extends Record<string, any>>(): VxeGridProps<T> {
   return {
     class: '',
     gridClass: '',
@@ -26,39 +58,31 @@ function getDefaultState(): VxeGridProps {
   };
 }
 
-export class VxeGridApi<T extends Record<string, any> = any> {
-  public formApi = {} as ExtendedFormApi;
-
-  // private prevState: null | VxeGridProps = null;
-  public grid = {} as VxeGridInstance<T>;
-  public state: null | VxeGridProps<T> = null;
-
+export class VxeGridApi<T extends Record<string, any> = Record<string, any>> {
+  public formApi!: ExtendedFormApi;
+  public grid!: VxeGridInstance<T>;
+  public state: VxeGridProps<T>;
   public store: Store<VxeGridProps<T>>;
 
   private isMounted = false;
-
   private stateHandler: StateHandler;
 
-  constructor(options: VxeGridProps = {}) {
-    const storeState = { ...options };
+  constructor(options: VxeGridProps<T> = {}) {
+    const defaultState = getDefaultState<T>();
+    const initialState = mergeState(defaultState, options);
 
-    const defaultState = getDefaultState();
-    this.store = new Store<VxeGridProps>(
-      mergeWithArrayOverride(storeState, defaultState),
-      {
-        onUpdate: () => {
-          // this.prevState = this.state;
-          this.state = this.store.state;
-        },
+    this.store = new Store<VxeGridProps<T>>(initialState, {
+      onUpdate: () => {
+        this.state = this.store.state;
       },
-    );
+    });
 
     this.state = this.store.state;
     this.stateHandler = new StateHandler();
     bindMethods(this);
   }
 
-  mount(instance: null | VxeGridInstance, formApi: ExtendedFormApi) {
+  mount(instance: null | VxeGridInstance<T>, formApi: ExtendedFormApi): void {
     if (!this.isMounted && instance) {
       this.grid = instance;
       this.formApi = formApi;
@@ -67,7 +91,7 @@ export class VxeGridApi<T extends Record<string, any> = any> {
     }
   }
 
-  async query(params: Record<string, any> = {}) {
+  async query(params: Record<string, any> = {}): Promise<void> {
     try {
       await this.grid.commitProxy('query', toRaw(params));
     } catch (error) {
@@ -75,7 +99,7 @@ export class VxeGridApi<T extends Record<string, any> = any> {
     }
   }
 
-  async reload(params: Record<string, any> = {}) {
+  async reload(params: Record<string, any> = {}): Promise<void> {
     try {
       await this.grid.commitProxy('reload', toRaw(params));
     } catch (error) {
@@ -83,13 +107,13 @@ export class VxeGridApi<T extends Record<string, any> = any> {
     }
   }
 
-  setGridOptions(options: Partial<VxeGridProps['gridOptions']>) {
+  setGridOptions(options: Partial<VxeGridProps<T>['gridOptions']>): void {
     this.setState({
       gridOptions: options,
     });
   }
 
-  setLoading(isLoading: boolean) {
+  setLoading(isLoading: boolean): void {
     this.setState({
       gridOptions: {
         loading: isLoading,
@@ -101,27 +125,26 @@ export class VxeGridApi<T extends Record<string, any> = any> {
     stateOrFn:
       | ((prev: VxeGridProps<T>) => Partial<VxeGridProps<T>>)
       | Partial<VxeGridProps<T>>,
-  ) {
+  ): void {
     if (isFunction(stateOrFn)) {
       this.store.setState((prev) => {
-        return mergeWithArrayOverride(stateOrFn(prev), prev);
+        const partial = stateOrFn(prev);
+        return mergeState(prev, partial);
       });
     } else {
-      this.store.setState((prev) => mergeWithArrayOverride(stateOrFn, prev));
+      this.store.setState((prev) => mergeState(prev, stateOrFn));
     }
   }
 
-  toggleSearchForm(show?: boolean) {
+  toggleSearchForm(show?: boolean): boolean | undefined {
+    const newValue = isBoolean(show) ? show : !this.state.showSearchForm;
     this.setState({
-      showSearchForm: isBoolean(show) ? show : !this.state?.showSearchForm,
+      showSearchForm: newValue,
     });
-    // nextTick(() => {
-    //   this.grid.recalculate();
-    // });
-    return this.state?.showSearchForm;
+    return this.state.showSearchForm;
   }
 
-  unmount() {
+  unmount(): void {
     this.isMounted = false;
     this.stateHandler.reset();
   }
